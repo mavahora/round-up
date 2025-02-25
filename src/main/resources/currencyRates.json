@@ -1,0 +1,5 @@
+{
+  "TND": { "conversionRateToGBP": 0.00025, "decimalPlaces": 3 },
+  "USD": { "conversionRateToGBP": 0.75, "decimalPlaces": 2 },
+  "EUR": { "conversionRateToGBP": 0.85, "decimalPlaces": 2 }
+}
