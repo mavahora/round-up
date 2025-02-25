@@ -1,0 +1,34 @@
+spring:
+  application:
+    name: roundup-service
+  datasource:
+    url: jdbc:h2:mem:starlingdb # In-memory so data will be lost when restarted. In real world it would be an actual database
+    driverClassName: org.h2.Driver
+    username: starling-admin
+    password: password
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: update
+  h2:
+    console:
+      enabled: true
+  redis:
+    host: localhost
+    port: 6379
+
+resilience4j:
+  retry:
+    instances:
+      starlingApiRetry:
+        max-attempts: 3  # Re-try 3 times
+        wait-duration: 2s  # Wait 2 seconds before retrying
+        retry-exceptions:
+          - org.springframework.web.client.ResourceAccessException  # Timeouts
+          - org.springframework.web.client.HttpServerErrorException  # 5xx errors
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException  # Don't retry 4xx errors
+
+starling:
+  api:
+    token: eyJhbGciOiJQUzI1NiIsInppcCI6IkdaSVAifQ.H4sIAAAAAAAA_21Ty46kMAz8lRHn8YhHeN7mtj-wH2ASpzsaSFASena02n_fQKBpWn2jquyyHZu_iXIu6RKcFAgazYfzaAelLz3qrw9uxuQ9cXMfIhosayrrFliVZ8BS1kBTtxJk31LdSFZRXodg-jMlXVaztMjqOi_fE4U-EnmRFQuBnJtZ-19mEGR_K7F5N5xKaBvBgGHWQyt7BGRVU2bEKp62wdubL9Ixo02Z7FlP0PZ5AaxkHEIWA5SIwU2yuhAhI4z1yTk5d9TpeV9AmmUlMNG30KTIoWIir4i1LG34MjA3Ey2PEjuF69oqaByps4Ti7UnwP9OToARpr6Qie-YH5fyJ2YAQNjTZkVD-DqLiPfLrSPfIA39b5ekNZ381VrmwMlBaqJsSMw4xuMcBNd9a42gFcKO9NUMstDCbZrRUdkSvjAYTdjprsTXAZ-fNuM9BI6ote0Qt0FMnaKDQxw7XsJE8BoQdD3ARd7xmTvhDtEsRbCYRHEGgRrxsnlE7PsFb1A750vOdhsHwMP3hHQkwyzM8s1uWNVINe6lY-0StUZY4qcmfgDtLcR8Ob2EVDi7m6OPEbaOeuNXnkYnDyfDsLywO8YXXIUZTfiUxDyQgjH2ckSPvw4DztMEJ9zMJ_3-4onBMxoqH8md2r3tmX-SD-dZ33tPSAHB3e6YmISP1uNN1Fc9LTv79ByQn3X-yBAAA.qFJgLltYRm2TUjYvyelQ2ugEwxtBM3zQBlUeBgm2cWuFjE29AZr2n11g3G57BJFZuRr_uttvZSFXb3gXeWSLTdgW9quiQ3C3Z3n0MvAuxh1SOz6iXu8oJDdnB39SueZaDOCeg25DswprDAWBBtD_qYNmfGZm3s9XeRIgaD8Jo0RdHntupri_A7SEmfJMT2mPhMHZbEJ7WAxx3-ON_r_IttKKgcRHyGYRfbaNf7sd3Rn0JnhFwm_lij-Ar73emddcP4aXnRYdPEyHDM5jxJTVqcCHdlFZIbacZmNbmhGEiPj_XyjkKcEFJSTRM83YqguuUynPya_GfreOd-CEIT0TUlBc9xahM8Il9fXaeE64o9X_HaEanwi7FMkb4c5lDIJqBbpE-aRdSuG4a-w90c36cnlfJjK3ii0IMkGfH_Ih8Y6IIdm-bXritSfxtQf9TdKgIjlWfF_oMWIezce6_XkZe0oprlohZtF3v0EOzjQmaB-DBlwbxeBWVXyCGXiPXxpfjGOM8rBRQX7tsDzluvQFgMDSQJvm62q-OkZF9ExGFyO5SrK8vMQ1fD_cMSh4FEG5kNSWZG30kbHXlWcaX60k1mqKhKhjzGPnN4km8IrXcEf0hRV0BSzmv0m7agnZi4IkVXa-rGElyqqEirDH6uWH91269ux43qNI_uKpIXZKxIE
