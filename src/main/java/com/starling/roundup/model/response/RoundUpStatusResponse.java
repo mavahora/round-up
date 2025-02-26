@@ -1,4 +1,4 @@
-package com.starling.roundup.model.dto;
+package com.starling.roundup.model.response;
 
 public enum RoundUpStatusResponse {
     IN_PROGRESS,  

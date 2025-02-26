@@ -1,4 +1,4 @@
-package com.starling.roundup.model;
+package com.starling.roundup.model.common;
 
 import lombok.Getter;
 import lombok.Setter;

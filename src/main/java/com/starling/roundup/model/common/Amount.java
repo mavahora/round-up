@@ -1,4 +1,4 @@
-package com.starling.roundup.model.dto;
+package com.starling.roundup.model.common;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;

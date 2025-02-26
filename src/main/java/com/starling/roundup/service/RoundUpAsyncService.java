@@ -4,8 +4,9 @@ import com.starling.roundup.client.StarlingApiClient;
 import com.starling.roundup.entity.RoundUpStatus;
 import com.starling.roundup.exception.InsufficientFundsException;
 import com.starling.roundup.exception.StarlingApiException;
-import com.starling.roundup.model.dto.StarlingFeedResponse;
+import com.starling.roundup.model.response.StarlingFeedResponse;
 import com.starling.roundup.repository.RoundUpRequestRepository;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -14,8 +15,12 @@ import java.time.LocalDate;
 
 import static com.starling.roundup.entity.RoundUpStatus.COMPLETED;
 import static com.starling.roundup.entity.RoundUpStatus.FAILED;
+import static com.starling.roundup.model.response.TransactionDirection.OUT;
+import static com.starling.roundup.util.Constants.GBP;
 import static com.starling.roundup.util.CurrencyConverter.convertToGBP;
+import static com.starling.roundup.util.LoggingUtils.maskAccountId;
 
+@Slf4j
 @Service
 public class RoundUpAsyncService {
 
@@ -28,36 +33,50 @@ public class RoundUpAsyncService {
     }
 
     @Async
-    public void processRoundUpAsync(String accountUid, String goalUid, LocalDate weekCommencing) {
+    public void processRoundUpAsync(String requestId, String accountUid, String maskedAccountUid, String goalUid, LocalDate weekCommencing) {
+        log.info("RequestId: {}, Starting round-up processing asynchronously for accountUid: {}, weekCommencing: {}", requestId, maskedAccountUid, weekCommencing);
         try {
-            StarlingFeedResponse response = starlingApiClient.fetchTransactions(accountUid, weekCommencing);
+            StarlingFeedResponse response = starlingApiClient.fetchTransactions(accountUid, maskedAccountUid, weekCommencing);
+            log.info("RequestId: {}, Response received from Starling Settled Transactions API for round-up calculation.", requestId);
 
-            long totalRoundUpAmount = calculateRoundUpAmount(response);
+            long totalRoundUpAmount = calculateRoundUpAmount(requestId, response);
+            log.debug("RequestId: {}, Calculated total round-up amount: {} minor units.", requestId, totalRoundUpAmount);
 
             if (totalRoundUpAmount == 0) {
+                log.warn("RequestId: {}, No transactions are eligible for round-up.", requestId);
                 updateRoundUpStatus(accountUid, weekCommencing, FAILED, 0);
                 throw new StarlingApiException("No transactions eligible for round-up.");
             }
 
             if (!hasSufficientFunds(accountUid, totalRoundUpAmount)) {
+                log.warn("RequestId: {}, Insufficient funds for round-up transfer.", requestId);
                 updateRoundUpStatus(accountUid, weekCommencing, FAILED, 0);
                 throw new InsufficientFundsException("Not enough funds available for transfer.");
             }
 
             starlingApiClient.transferToSavingsGoal(accountUid, goalUid, totalRoundUpAmount);
             updateRoundUpStatus(accountUid, weekCommencing, COMPLETED, totalRoundUpAmount);
+            log.info("RequestId: {}, Successfully completed round-up transfer of {} minor units.", requestId, totalRoundUpAmount);
         } catch (Exception e) {
             // No need to throw exception as this is a void Async method, client would have already
             // received a 202 response. Update status as FAILED.
+            log.error("RequestId: {}, Error processing round-up: {}", requestId, e.getMessage());
             updateRoundUpStatus(accountUid, weekCommencing, FAILED, 0);
         }
 
     }
 
-    private static long calculateRoundUpAmount(StarlingFeedResponse response) {
+    private static long calculateRoundUpAmount(String requestId, StarlingFeedResponse response) {
         return response.getFeedItems().stream()
-                // If currency is not GBP, convert to GBP and return minorUnits so we can round-up change in GBP
-                .map(feedItem -> convertToGBP(feedItem.getAmount())) // Amount in minor units/pence (GBP)
+                .filter(feedItem -> OUT.equals(feedItem.getDirection())) // Only look at transactions going out
+                .map(feedItem -> {
+                    if (GBP.equals(feedItem.getAmount().getCurrency())) {
+                        // If currency is GBP, no need to convert minor units
+                        return feedItem.getAmount().getMinorUnits();
+                    }
+                    // Convert to GBP and return minor units
+                    return convertToGBP(requestId, feedItem.getAmount());
+                })
                 .filter(amount -> amount % 100 != 0)  // If the amount is a whole pound, you can not round up
                 .mapToLong(amount -> 100 - (amount % 100))  // Calculate round-up amount for each transaction
                 .sum();
@@ -69,6 +88,7 @@ public class RoundUpAsyncService {
     }
 
     private void updateRoundUpStatus(String accountUid, LocalDate weekCommencing, RoundUpStatus status, long amount) {
+        log.info("Updating round-up status for accountUid: {}, weekCommencing: {}, status: {}, amount: {}", maskAccountId(accountUid), weekCommencing, status, amount);
         roundUpRequestRepository.updateStatusAndAmountByAccountAndWeek(accountUid, weekCommencing, status, amount);
     }
 }

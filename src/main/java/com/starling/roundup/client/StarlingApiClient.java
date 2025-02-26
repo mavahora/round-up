@@ -1,8 +1,13 @@
 package com.starling.roundup.client;
 
 import com.starling.roundup.exception.StarlingApiException;
-import com.starling.roundup.model.dto.*;
+import com.starling.roundup.model.common.*;
+import com.starling.roundup.model.request.StarlingTransferSavingsGoalRequest;
+import com.starling.roundup.model.response.StarlingBalanceResponse;
+import com.starling.roundup.model.response.StarlingFeedResponse;
+import com.starling.roundup.model.response.StarlingTransferSavingsGoalResponse;
 import io.github.resilience4j.retry.annotation.Retry;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
@@ -19,9 +24,11 @@ import static com.starling.roundup.util.Constants.*;
 import static com.starling.roundup.util.DateUtil.toStarlingDateFormat;
 import static com.starling.roundup.util.DateUtil.toStarlingEndDate;
 import static com.starling.roundup.util.IdUtils.generateUUID;
+import static com.starling.roundup.util.LoggingUtils.maskAccountId;
 import static org.springframework.http.HttpMethod.GET;
 import static org.springframework.http.HttpMethod.PUT;
 
+@Slf4j
 @Component
 public class StarlingApiClient {
 
@@ -40,7 +47,8 @@ public class StarlingApiClient {
      * @return
      */
     @Retry(name = "starlingApiRetry")
-    public StarlingFeedResponse fetchTransactions(String accountUid, LocalDate weekCommencing) {
+    public StarlingFeedResponse fetchTransactions(String accountUid, String maskedAccountUid, LocalDate weekCommencing) {
+        log.info("Fetching settled transactions for accountUid: {}, weekCommencing: {}", maskedAccountUid, weekCommencing);
         try {
             String startDate = toStarlingDateFormat(weekCommencing);
             String endDate = toStarlingEndDate(weekCommencing);
@@ -50,18 +58,26 @@ public class StarlingApiClient {
                     GET, getHttpEntity(), StarlingFeedResponse.class,
                     accountUid, startDate, endDate);
             if (response.getBody() == null) {
+                log.error("Starling API returned null for transaction feed.");
                 throw new StarlingApiException("Starling API returned null for transaction feed.");
             }
+            log.info("Starling API successfully fetched {} transactions for accountUid: {}", response.getBody().getFeedItems().size(), maskedAccountUid);
+
             return response.getBody();
         } catch (HttpStatusCodeException e) {
+            log.error("Error fetching transactions for accountUid: {} - Status: {}, Response: {}", maskedAccountUid, e.getStatusCode(), e.getResponseBodyAsString());
             throw new StarlingApiException(e.getStatusCode(), e.getResponseBodyAsString());
         } catch (RestClientException e) {
+            log.error("Error fetching transactions for accountUid: {} - Exception: {}", maskedAccountUid, e.getMessage());
             throw new StarlingApiException("An error occurred when calling Starling API: " + e.getMessage());
         }
     }
 
     @Retry(name = "starlingApiRetry")
     public void transferToSavingsGoal(String accountUid, String goalUid, long totalRoundUpAmount) {
+        String maskedAccountId = maskAccountId(accountUid);
+        String maskedGoalId = maskAccountId(goalUid);
+        log.info("Transferring {} minor units to savings goal {} for accountUid: {}", totalRoundUpAmount, maskedGoalId, maskedAccountId);
         try {
             StarlingTransferSavingsGoalRequest request = new StarlingTransferSavingsGoalRequest(
                     new Amount(GBP, totalRoundUpAmount));
@@ -71,17 +87,23 @@ public class StarlingApiClient {
                     accountUid, goalUid, generateUUID());
 
             if (response.getStatusCode().isError()) {
+                log.error("Failed to transfer funds to savings goal for accountUid: {} - Status: {}", maskedAccountId, response.getStatusCode());
                 throw new StarlingApiException("Starling API failed to transfer funds: " + response.getStatusCode());
             }
+            log.info("Successfully transferred {} minor units to savings goal {} for accountUid: {}", totalRoundUpAmount, maskedGoalId, maskedAccountId);
         } catch (HttpStatusCodeException e) {
+            log.error("Error transferring funds for accountUid: {} - Status: {}, Response: {}", maskedAccountId, e.getStatusCode(), e.getResponseBodyAsString());
             throw new StarlingApiException(e.getStatusCode(), e.getResponseBodyAsString());
         } catch (RestClientException e) {
+            log.error("Error transferring funds for accountUid: {} - Exception: {}", maskedAccountId, e.getMessage());
             throw new StarlingApiException("An error occurred when calling Starling API: " + e.getMessage());
         }
     }
 
     @Retry(name = "starlingApiRetry")
     public StarlingBalanceResponse getAccountBalance(String accountUid) {
+        String maskedAccountUid = maskAccountId(accountUid);
+        log.info("Fetching account balance for accountUid: {}", maskedAccountUid);
         try {
             ResponseEntity<StarlingBalanceResponse> response = restTemplate.exchange(
                     API_BASE_URL + API_ACCOUNT_BALANCE,
@@ -89,13 +111,16 @@ public class StarlingApiClient {
                     accountUid);
 
             if (response.getBody() == null) {
+                log.error("Starling API returned null for balance check.");
                 throw new StarlingApiException("Starling API returned null for balance check.");
             }
-
+            log.info("Fetched account balance for accountUid: {}", maskedAccountUid);
             return response.getBody();
         } catch (HttpStatusCodeException e) {
+            log.error("Error fetching balance for accountUid: {} - Status: {}, Response: {}", maskedAccountUid, e.getStatusCode(), e.getResponseBodyAsString());
             throw new StarlingApiException(e.getStatusCode(), e.getResponseBodyAsString());
         } catch (RestClientException e) {
+            log.error("Error fetching balance for accountUid: {} - Exception: {}", maskedAccountUid, e.getMessage());
             throw new StarlingApiException("An error occurred when calling Starling API balance check: " + e.getMessage());
         }
     }
