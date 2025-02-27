@@ -6,9 +6,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 
 import static jakarta.persistence.EnumType.STRING;
 
@@ -33,7 +31,7 @@ public class RoundUpRequest {
 
     @Enumerated(STRING)
     @Column(nullable = false)
-    private RoundUpStatus status;
+    private Status status;
 
     @Column(nullable = false)
     private long roundUpAmount;

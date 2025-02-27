@@ -1,7 +1,9 @@
 package com.starling.roundup.service;
 
 import com.starling.roundup.entity.RoundUpRequest;
+import com.starling.roundup.entity.Status;
 import com.starling.roundup.model.response.RoundUpStatusResponse;
+import com.starling.roundup.model.response.StatusResponse;
 import com.starling.roundup.repository.RoundUpRequestRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
@@ -14,10 +16,14 @@ import java.time.LocalDate;
 import java.util.Map;
 import java.util.Optional;
 
-import static com.starling.roundup.entity.RoundUpStatus.*;
-import static com.starling.roundup.model.response.RoundUpStatusResponse.ALREADY_IN_PROGRESS;
+import static com.starling.roundup.entity.Status.*;
+import static com.starling.roundup.entity.Status.COMPLETED;
+import static com.starling.roundup.entity.Status.FAILED;
+import static com.starling.roundup.model.response.StatusResponse.*;
+import static com.starling.roundup.model.response.StatusResponse.IN_PROGRESS;
 import static com.starling.roundup.util.IdUtils.generateUUID;
-import static com.starling.roundup.util.LoggingUtils.maskAccountId;
+import static com.starling.roundup.util.LoggingUtils.maskSensitiveData;
+import static java.lang.String.valueOf;
 import static org.springframework.http.HttpStatus.CONFLICT;
 
 @Slf4j
@@ -61,8 +67,8 @@ public class RoundUpService {
      * @param weekCommencing
      * @return
      */
-    public ResponseEntity<Map<String, Object>> initiateRoundUp(String accountUid, String maskedAccountUid, String goalUid, LocalDate weekCommencing) {
-        log.info("Initiating round-up for accountUid: {}, goalUid: {}, weekCommencing: {}", maskedAccountUid, maskAccountId(goalUid), weekCommencing);
+    public ResponseEntity<RoundUpStatusResponse> initiateRoundUp(String accountUid, String maskedAccountUid, String goalUid, LocalDate weekCommencing) {
+        log.info("Initiating round-up for accountUid: {}, goalUid: {}, weekCommencing: {}", maskedAccountUid, maskSensitiveData(goalUid), weekCommencing);
         Optional<RoundUpRequest> existingRequest = roundUpRequestRepository.findByAccountIdAndWeekCommencing(accountUid, weekCommencing);
 
         if (existingRequest.isPresent()) {
@@ -72,20 +78,18 @@ public class RoundUpService {
             // If request is already completed, return COMPLETED status with round-up amount
             if (request.getStatus() == COMPLETED) {
                 log.info("Round-up already completed for accountUid: {}, weekCommencing: {}", maskedAccountUid, weekCommencing);
-                return ResponseEntity.ok(Map.of(
-                        "status", RoundUpStatusResponse.ALREADY_COMPLETED,
-                        "roundUpAmount", request.getRoundUpAmount()
-                ));
+                return ResponseEntity.ok(new RoundUpStatusResponse(ALREADY_COMPLETED, valueOf(request.getRoundUpAmount())));
             }
 
-            // If request is in progress, return IN_PROGRESS response to prevent duplicate procesing
-            if (request.getStatus() == IN_PROGRESS) {
+            // If request is in progress, return IN_PROGRESS response to prevent duplicate processing
+            if (request.getStatus() == Status.IN_PROGRESS) {
                 log.warn("Round-up already in progress for accountUid: {}, weekCommencing: {}", maskedAccountUid, weekCommencing);
-                return ResponseEntity.status(CONFLICT).body(Map.of("status", ALREADY_IN_PROGRESS));
+                return ResponseEntity.status(CONFLICT).body(new RoundUpStatusResponse(ALREADY_IN_PROGRESS));
             }
         }
-        // Unique lock with accountid & week commencing to prevent race conditions where multiple
-        // requests may try rounding up simultaneously.
+        // Unique lock with accountUid & week commencing to prevent race conditions where multiple
+        // requests may try rounding up simultaneously. Using accountUid & weekCommencing as this
+        // will be unique, although requestId will also be unique, the client will not know the requestId
         RLock lock = redissonClient.getLock("roundup-lock:" + accountUid + ":" + weekCommencing);
         if (lock.tryLock()) {
             log.debug("Acquired lock to process round-up for accountUid: {}, weekCommencing: {}", maskedAccountUid, weekCommencing);
@@ -96,7 +100,7 @@ public class RoundUpService {
                 // be implemented to limit re-tries
                 if (existingRequest.isPresent() && existingRequest.get().getStatus() == FAILED) {
                     request = existingRequest.get();
-                    request.setStatus(IN_PROGRESS);
+                    request.setStatus(Status.IN_PROGRESS);
                     log.info("Retrying failed round-up for accountUid: {}, weekCommencing: {}", maskedAccountUid, weekCommencing);
                 } else {
                     // Create a new round-up request for this week and account
@@ -107,12 +111,12 @@ public class RoundUpService {
                 log.debug("Round-up request: {} saved in DB", request.getRequestId());
 
                 // Process calling the Starling APIs, calculation and updating of database asynchronously
-                roundUpAsyncService.processRoundUpAsync(request.getRequestId(), accountUid, maskedAccountUid, goalUid, weekCommencing);
+                roundUpAsyncService.processRoundUpAsync("" ,request.getRequestId(), accountUid, maskedAccountUid, goalUid, weekCommencing);
                 log.info("Round-up processing started asynchronously for requestId: {}", request.getRequestId());
 
                 // Return a 202 accepted response with the requestID so the client can poll and check the porgress
                 // of the round up.
-                return ResponseEntity.accepted().body(Map.of("status", RoundUpStatusResponse.IN_PROGRESS, "requestId", request.getRequestId()));
+                return ResponseEntity.accepted().body(new RoundUpStatusResponse(IN_PROGRESS));
             } catch (Exception e) {
                 log.error("Error occurred when initiating round-up for accountUid: {}, weekCommencing: {}", maskedAccountUid, weekCommencing, e);
                 throw e;
@@ -121,32 +125,31 @@ public class RoundUpService {
             }
         } else {
             log.debug("Could not acquire lock as round-up is already in progress for accountUid: {}, weekCommencing: {}", maskedAccountUid, weekCommencing);
-            return ResponseEntity.ok(Map.of("status", ALREADY_IN_PROGRESS));
+            return ResponseEntity.ok(new RoundUpStatusResponse(ALREADY_IN_PROGRESS));
         }
     }
 
     /**
-     *
      * @param accountId
      * @param maskedAccountId
      * @param weekCommencing
      * @return
      */
-    public ResponseEntity<Map<String, Object>> checkRoundUpStatus(String accountId, String maskedAccountId, LocalDate weekCommencing) {
+    public ResponseEntity<RoundUpStatusResponse> checkRoundUpStatus(String accountId, String maskedAccountId, LocalDate weekCommencing) {
         log.info("Checking round-up status for accountId: {}, weekCommencing: {}", maskedAccountId, weekCommencing);
-        Optional<RoundUpRequest> requestOpt = roundUpRequestRepository.findByAccountIdAndWeekCommencing(accountId, weekCommencing);
+        Optional<RoundUpRequest> roundUpRequest = roundUpRequestRepository.findByAccountIdAndWeekCommencing(accountId, weekCommencing);
 
-        if (requestOpt.isEmpty()) {
+        if (roundUpRequest.isEmpty()) {
             log.warn("No round-up request found for accountId: {}, weekCommencing: {}", maskedAccountId, weekCommencing);
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("status", "NOT_FOUND"));
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new RoundUpStatusResponse(StatusResponse.NOT_FOUND));
         }
 
-        RoundUpRequest request = requestOpt.get();
+        RoundUpRequest request = roundUpRequest.get();
         log.info("Round-up request found with status: {} for accountId: {}, weekCommencing: {}", request.getStatus(), maskedAccountId, weekCommencing);
-        return ResponseEntity.ok(Map.of(
-                "status", request.getStatus(),
-                "roundUpAmount", request.getStatus() == COMPLETED ? request.getRoundUpAmount() : null
-        ));
+        RoundUpStatusResponse response = new RoundUpStatusResponse();
+        response.setStatus(fromStatus(request.getStatus()));
+        if (COMPLETED.equals(request.getStatus())) response.setRoundUpAmount(valueOf(request.getRoundUpAmount()));
+        return ResponseEntity.ok(response);
     }
 
     private RoundUpRequest createNewRoundUpRequest(String accountUid, LocalDate weekCommencing) {
@@ -154,7 +157,7 @@ public class RoundUpService {
         request.setRequestId(generateUUID());
         request.setAccountId(accountUid);
         request.setWeekCommencing(weekCommencing);
-        request.setStatus(IN_PROGRESS);
+        request.setStatus(Status.IN_PROGRESS);
         return request;
     }
 }

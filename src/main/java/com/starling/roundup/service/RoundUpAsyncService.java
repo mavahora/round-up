@@ -1,7 +1,9 @@
 package com.starling.roundup.service;
 
-import com.starling.roundup.client.StarlingApiClient;
-import com.starling.roundup.entity.RoundUpStatus;
+import com.starling.roundup.client.StarlingAccountApiClient;
+import com.starling.roundup.client.StarlingGoalsApiClient;
+import com.starling.roundup.client.StarlingTransactionApiClient;
+import com.starling.roundup.entity.Status;
 import com.starling.roundup.exception.InsufficientFundsException;
 import com.starling.roundup.exception.StarlingApiException;
 import com.starling.roundup.model.response.StarlingFeedResponse;
@@ -13,30 +15,34 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 
-import static com.starling.roundup.entity.RoundUpStatus.COMPLETED;
-import static com.starling.roundup.entity.RoundUpStatus.FAILED;
+import static com.starling.roundup.entity.Status.COMPLETED;
+import static com.starling.roundup.entity.Status.FAILED;
 import static com.starling.roundup.model.response.TransactionDirection.OUT;
 import static com.starling.roundup.util.Constants.GBP;
 import static com.starling.roundup.util.CurrencyConverter.convertToGBP;
-import static com.starling.roundup.util.LoggingUtils.maskAccountId;
+import static com.starling.roundup.util.LoggingUtils.maskSensitiveData;
 
 @Slf4j
 @Service
 public class RoundUpAsyncService {
 
-    private final StarlingApiClient starlingApiClient;
+    private final StarlingAccountApiClient accountsApiClient;
+    private final StarlingGoalsApiClient goalsApiClient;
+    private final StarlingTransactionApiClient transactionApiClient;
     private final RoundUpRequestRepository roundUpRequestRepository;
 
-    public RoundUpAsyncService(StarlingApiClient starlingApiClient, RoundUpRequestRepository roundUpRequestRepository) {
-        this.starlingApiClient = starlingApiClient;
+    public RoundUpAsyncService(StarlingAccountApiClient accountsApiClient, StarlingGoalsApiClient goalsApiClient, StarlingTransactionApiClient transactionApiClient, RoundUpRequestRepository roundUpRequestRepository) {
+        this.accountsApiClient = accountsApiClient;
+        this.goalsApiClient = goalsApiClient;
+        this.transactionApiClient = transactionApiClient;
         this.roundUpRequestRepository = roundUpRequestRepository;
     }
 
     @Async
-    public void processRoundUpAsync(String requestId, String accountUid, String maskedAccountUid, String goalUid, LocalDate weekCommencing) {
+    public void processRoundUpAsync(String authToken, String requestId, String accountUid, String maskedAccountUid, String goalUid, LocalDate weekCommencing) {
         log.info("RequestId: {}, Starting round-up processing asynchronously for accountUid: {}, weekCommencing: {}", requestId, maskedAccountUid, weekCommencing);
         try {
-            StarlingFeedResponse response = starlingApiClient.fetchTransactions(accountUid, maskedAccountUid, weekCommencing);
+            StarlingFeedResponse response = transactionApiClient.fetchTransactions(authToken, accountUid, maskedAccountUid, weekCommencing);
             log.info("RequestId: {}, Response received from Starling Settled Transactions API for round-up calculation.", requestId);
 
             long totalRoundUpAmount = calculateRoundUpAmount(requestId, response);
@@ -48,13 +54,13 @@ public class RoundUpAsyncService {
                 throw new StarlingApiException("No transactions eligible for round-up.");
             }
 
-            if (!hasSufficientFunds(accountUid, totalRoundUpAmount)) {
+            if (!hasSufficientFunds(authToken, accountUid, totalRoundUpAmount)) {
                 log.warn("RequestId: {}, Insufficient funds for round-up transfer.", requestId);
                 updateRoundUpStatus(accountUid, weekCommencing, FAILED, 0);
                 throw new InsufficientFundsException("Not enough funds available for transfer.");
             }
 
-            starlingApiClient.transferToSavingsGoal(accountUid, goalUid, totalRoundUpAmount);
+            goalsApiClient.transferToSavingsGoal(authToken, accountUid, goalUid, totalRoundUpAmount);
             updateRoundUpStatus(accountUid, weekCommencing, COMPLETED, totalRoundUpAmount);
             log.info("RequestId: {}, Successfully completed round-up transfer of {} minor units.", requestId, totalRoundUpAmount);
         } catch (Exception e) {
@@ -82,13 +88,13 @@ public class RoundUpAsyncService {
                 .sum();
     }
 
-    public boolean hasSufficientFunds(String accountUid, long amountToTransfer) {
-        BigDecimal effectiveBalance = starlingApiClient.getAccountBalance(accountUid).getEffectiveBalance().getAmountInPounds();
+    public boolean hasSufficientFunds(String authToken, String accountUid, long amountToTransfer) {
+        BigDecimal effectiveBalance = accountsApiClient.getAccountBalance(authToken, accountUid).getEffectiveBalance().getAmountInPounds();
         return effectiveBalance.compareTo(BigDecimal.valueOf(amountToTransfer).divide(BigDecimal.valueOf(100))) >= 0;
     }
 
-    private void updateRoundUpStatus(String accountUid, LocalDate weekCommencing, RoundUpStatus status, long amount) {
-        log.info("Updating round-up status for accountUid: {}, weekCommencing: {}, status: {}, amount: {}", maskAccountId(accountUid), weekCommencing, status, amount);
+    private void updateRoundUpStatus(String accountUid, LocalDate weekCommencing, Status status, long amount) {
+        log.info("Updating round-up status for accountUid: {}, weekCommencing: {}, status: {}, amount: {}", maskSensitiveData(accountUid), weekCommencing, status, amount);
         roundUpRequestRepository.updateStatusAndAmountByAccountAndWeek(accountUid, weekCommencing, status, amount);
     }
 }
